@@ -1,0 +1,222 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+"""Tests for the cloudtrail MCP Server."""
+
+import pytest
+from awslabs.cloudtrail_mcp_server.common import (
+    parse_relative_time,
+    parse_time_input,
+    remove_null_values,
+    validate_max_results,
+)
+from awslabs.cloudtrail_mcp_server.tools import CloudTrailTools
+from datetime import datetime, timedelta, timezone
+from unittest.mock import Mock, patch
+
+
+def test_server_import():
+    """Test that the server module can be imported without errors."""
+    # This test ensures the server can be imported and initialized
+    from awslabs.cloudtrail_mcp_server import server
+
+    assert server is not None
+
+
+def test_cloudtrail_tools_initialization():
+    """Test CloudTrail tools can be initialized."""
+    tools = CloudTrailTools()
+    assert tools is not None
+    assert tools._cloudtrail_client is None
+    assert tools._cloudtrail_client_region is None
+
+
+class TestCommonUtilities:
+    """Test cases for common utility functions."""
+
+    def test_parse_relative_time_valid_inputs(self):
+        """Test parse_relative_time with valid inputs."""
+        now = datetime.now(timezone.utc)
+
+        # Test various time units
+        result = parse_relative_time('1 hour ago')
+        expected = now - timedelta(hours=1)
+        assert abs((result - expected).total_seconds()) < 2  # Allow 2 second tolerance
+
+        result = parse_relative_time('2 days ago')
+        expected = now - timedelta(days=2)
+        assert abs((result - expected).total_seconds()) < 2
+
+        result = parse_relative_time('now')
+        assert abs((result - now).total_seconds()) < 2
+
+    def test_parse_relative_time_invalid_input(self):
+        """Test parse_relative_time with invalid input."""
+        with pytest.raises(ValueError):
+            parse_relative_time('invalid time format')
+
+    def test_parse_time_input_iso_format(self):
+        """Test parse_time_input with ISO format."""
+        iso_time = '2023-01-01T12:00:00Z'
+        result = parse_time_input(iso_time)
+        expected = datetime(2023, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+        assert result == expected
+
+    def test_parse_time_input_relative_format(self):
+        """Test parse_time_input with relative format."""
+        result = parse_time_input('1 day ago')
+        now = datetime.now(timezone.utc)
+        expected = now - timedelta(days=1)
+        assert abs((result - expected).total_seconds()) < 2
+
+    def test_validate_max_results(self):
+        """Test validate_max_results function."""
+        # Test default behavior
+        assert validate_max_results(None, default=10, max_allowed=50) == 10
+
+        # Test normal values
+        assert validate_max_results(25, default=10, max_allowed=50) == 25
+
+        # Test boundary conditions
+        assert validate_max_results(0, default=10, max_allowed=50) == 1
+        assert validate_max_results(100, default=10, max_allowed=50) == 50
+
+    def test_remove_null_values(self):
+        """Test remove_null_values function."""
+        # Test with mixed data
+        data = {
+            'key1': 'value1',
+            'key2': None,
+            'key3': 'value3',
+            'key4': None,
+            'key5': 0,  # Should keep 0
+            'key6': '',  # Should keep empty string
+            'key7': False,  # Should keep False
+        }
+
+        result = remove_null_values(data)
+        expected = {
+            'key1': 'value1',
+            'key3': 'value3',
+            'key5': 0,
+            'key6': '',
+            'key7': False,
+        }
+
+        assert result == expected
+
+        # Test with empty dict
+        assert remove_null_values({}) == {}
+
+        # Test with all None values
+        assert remove_null_values({'a': None, 'b': None}) == {}
+
+        # Test with no None values
+        data_no_none = {'a': 1, 'b': 'test'}
+        assert remove_null_values(data_no_none) == data_no_none
+
+    def test_parse_time_input_various_formats(self):
+        """Test parse_time_input with various ISO formats."""
+        # Test different ISO formats
+        test_cases = [
+            ('2023-01-01T12:00:00Z', datetime(2023, 1, 1, 12, 0, 0, tzinfo=timezone.utc)),
+            ('2023-01-01T12:00:00+00:00', datetime(2023, 1, 1, 12, 0, 0, tzinfo=timezone.utc)),
+            ('2023-01-01 12:00:00', datetime(2023, 1, 1, 12, 0, 0, tzinfo=timezone.utc)),
+            ('2023-01-01', datetime(2023, 1, 1, 0, 0, 0, tzinfo=timezone.utc)),
+        ]
+
+        for input_str, expected in test_cases:
+            result = parse_time_input(input_str)
+            assert result == expected, f'Failed for input: {input_str}'
+
+    def test_parse_relative_time_various_units(self):
+        """Test parse_relative_time with various time units."""
+        now = datetime.now(timezone.utc)
+
+        test_cases = [
+            ('1 second ago', timedelta(seconds=1)),
+            ('5 minutes ago', timedelta(minutes=5)),
+            ('3 hours ago', timedelta(hours=3)),
+            ('2 days ago', timedelta(days=2)),
+            ('1 week ago', timedelta(weeks=1)),
+            ('2 months ago', timedelta(days=60)),  # Approximate
+            ('1 year ago', timedelta(days=365)),  # Approximate
+        ]
+
+        for input_str, expected_delta in test_cases:
+            result = parse_relative_time(input_str)
+            expected = now - expected_delta
+            # Allow 2 second tolerance
+            assert abs((result - expected).total_seconds()) < 2, f'Failed for: {input_str}'
+
+
+@pytest.mark.asyncio
+class TestCloudTrailToolsMocked:
+    """Test CloudTrail tools with mocked AWS calls."""
+
+    @patch('boto3.Session')
+    def test_get_cloudtrail_client(self, mock_session):
+        """Test _get_cloudtrail_client method."""
+        # Setup mock
+        mock_client = Mock()
+        mock_session.return_value.client.return_value = mock_client
+
+        # Test
+        tools = CloudTrailTools()
+        result = tools._get_cloudtrail_client('us-east-1')
+
+        # Verify
+        assert result == mock_client
+        mock_session.assert_called_once()
+        mock_session.return_value.client.assert_called_once_with(
+            'cloudtrail', config=pytest.helpers.any_config()
+        )
+
+    def test_cloudtrail_client_property(self):
+        """Test cloudtrail_client property caching."""
+        tools = CloudTrailTools()
+
+        with patch.object(tools, '_get_cloudtrail_client') as mock_get_client:
+            mock_client = Mock()
+            mock_get_client.return_value = mock_client
+
+            # First access should create client
+            client1 = tools.cloudtrail_client
+            assert client1 == mock_client
+            assert tools._cloudtrail_client_region == 'us-east-1'
+
+            # Second access should use cached client
+            client2 = tools.cloudtrail_client
+            assert client2 == mock_client
+
+            # Should only call _get_cloudtrail_client once due to caching
+            mock_get_client.assert_called_once_with('us-east-1')
+
+
+# Helper for pytest to allow any config object
+@pytest.fixture(autouse=True)
+def setup_pytest_helpers(monkeypatch):
+    """Setup pytest helpers."""
+
+    class AnyConfig:
+        def __eq__(self, other):
+            return True
+
+        def __repr__(self):
+            return '<AnyConfig>'
+
+    if not hasattr(pytest, 'helpers'):
+        pytest.helpers = type('helpers', (), {})()
+
+    pytest.helpers.any_config = AnyConfig
