@@ -179,9 +179,11 @@ class TestCloudTrailToolsMocked:
         # Verify
         assert result == mock_client
         mock_session.assert_called_once()
-        mock_session.return_value.client.assert_called_once_with(
-            'cloudtrail', config=pytest.helpers.any_config()
-        )
+        # Just verify it was called with cloudtrail and some config
+        mock_session.return_value.client.assert_called_once()
+        call_args = mock_session.return_value.client.call_args
+        assert call_args[0][0] == 'cloudtrail'
+        assert 'config' in call_args[1]
 
     def test_cloudtrail_client_property(self):
         """Test cloudtrail_client property caching."""
@@ -202,21 +204,3 @@ class TestCloudTrailToolsMocked:
 
             # Should only call _get_cloudtrail_client once due to caching
             mock_get_client.assert_called_once_with('us-east-1')
-
-
-# Helper for pytest to allow any config object
-@pytest.fixture(autouse=True)
-def setup_pytest_helpers(monkeypatch):
-    """Setup pytest helpers."""
-
-    class AnyConfig:
-        def __eq__(self, other):
-            return True
-
-        def __repr__(self):
-            return '<AnyConfig>'
-
-    if not hasattr(pytest, 'helpers'):
-        pytest.helpers = type('helpers', (), {})()
-
-    pytest.helpers.any_config = AnyConfig

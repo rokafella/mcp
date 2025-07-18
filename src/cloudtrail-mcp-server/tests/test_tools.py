@@ -310,7 +310,9 @@ class TestLakeQuery:
         assert isinstance(result, QueryResult)
         assert result.query_id == 'query-123'
         assert result.query_status == 'FINISHED'
+        assert result.query_result_rows is not None
         assert len(result.query_result_rows) == 2
+        assert result.query_statistics is not None
         assert result.query_statistics['ResultsCount'] == 2
 
         # Verify calls were made
@@ -453,6 +455,7 @@ class TestGetQueryStatus:
         assert isinstance(result, QueryStatus)
         assert result.query_id == 'query-status-123'
         assert result.query_status == 'FINISHED'
+        assert result.query_statistics is not None
         assert result.query_statistics['ResultsCount'] == 10
         assert result.query_statistics['ExecutionTimeInMillis'] == 1500
         assert result.error_message is None
@@ -943,6 +946,7 @@ class TestModels:
         assert result.query_id == 'test-query'
         assert result.query_status == 'FINISHED'
         assert result.query_result_rows == []
+        assert result.query_statistics is not None
         assert result.query_statistics['ResultsCount'] == 0
         assert result.next_token is None
         assert result.error_message is None
@@ -960,6 +964,7 @@ class TestModels:
 
         assert status.query_id == 'status-query'
         assert status.query_status == 'RUNNING'
+        assert status.query_statistics is not None
         assert status.query_statistics['ExecutionTimeInMillis'] == 5000
         assert status.error_message is None
         assert status.delivery_s3_uri == 's3://bucket/path/'

@@ -260,6 +260,10 @@ class CloudTrailTools:
             poll_interval = 2  # 2 seconds
             elapsed_time = 0
 
+            # Initialize variables to avoid "possibly unbound" errors
+            query_status = 'RUNNING'
+            status_response = {}
+
             while elapsed_time < max_wait_time:
                 status_response = cloudtrail_client.describe_query(QueryId=query_id)
                 query_status = status_response['QueryStatus']
