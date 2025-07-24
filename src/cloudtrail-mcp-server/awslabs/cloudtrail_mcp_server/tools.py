@@ -29,7 +29,6 @@ from awslabs.cloudtrail_mcp_server.models import (
     QueryStatus,
 )
 from botocore.config import Config
-from datetime import datetime
 from loguru import logger
 from mcp.server.fastmcp import Context
 from pydantic import Field
@@ -364,7 +363,7 @@ class CloudTrailTools:
             str,
             Field(description='AWS region to query. Defaults to us-east-1.'),
         ] = 'us-east-1',
-    ) -> Dict[str, Any]:
+    ) -> List[Dict[str, Any]]:
         """List available CloudTrail Lake Event Data Stores with their capabilities and event selectors.
 
         Event Data Stores are the storage and query engines for CloudTrail Lake. This tool helps you
@@ -375,9 +374,7 @@ class CloudTrailTools:
 
         Returns:
         --------
-        Dictionary containing:
-            - event_data_stores: List of available Event Data Stores with their configurations
-            - summary: Summary of the Event Data Stores capabilities
+        List of available Event Data Stores with their configurations
         """
         try:
             # Create CloudTrail client for the specified region
@@ -420,114 +417,12 @@ class CloudTrailTools:
                 # Remove null values from the formatted store
                 formatted_stores.append(remove_null_values(formatted_store))
 
-            # Create summary
-            summary = {
-                'total_stores': len(formatted_stores),
-                'active_stores': len(
-                    [s for s in formatted_stores if s.get('status') == 'ENABLED']
-                ),
-                'multi_region_stores': len(
-                    [s for s in formatted_stores if s.get('multi_region_enabled')]
-                ),
-                'organization_stores': len(
-                    [s for s in formatted_stores if s.get('organization_enabled')]
-                ),
-            }
-
-            result = {
-                'event_data_stores': formatted_stores,
-                'summary': summary,
-                'region': region,
-            }
-
             logger.info(
                 f'Successfully retrieved {len(formatted_stores)} Event Data Stores from region {region}'
             )
-            return result
+            return formatted_stores
 
         except Exception as e:
             logger.error(f'Error in list_event_data_stores: {str(e)}')
             await ctx.error(f'Error listing Event Data Stores: {str(e)}')
             raise
-
-    def _process_query_results(
-        self, raw_results: List[List[Dict[str, Any]]]
-    ) -> List[Dict[str, Any]]:
-        """Process CloudTrail Lake query results into a user-friendly format.
-
-        Converts the nested field/value format into simple dictionaries.
-
-        Args:
-            raw_results: Raw CloudTrail Lake results in nested format
-
-        Returns:
-            List of processed result dictionaries
-        """
-        if not raw_results:
-            return []
-
-        processed_results = []
-
-        # Process each row
-        for row in raw_results:
-            if not row or not isinstance(row, list):
-                continue
-
-            # Convert field/value pairs to dictionary
-            processed_row = {}
-            for field_info in row:
-                if (
-                    isinstance(field_info, dict)
-                    and 'field' in field_info
-                    and 'value' in field_info
-                ):
-                    field_name = field_info['field']
-                    field_value = field_info['value']
-
-                    # Handle different data types
-                    processed_row[field_name] = self._format_field_value(field_value)
-
-            if processed_row:  # Only add non-empty rows
-                processed_results.append(processed_row)
-
-        return processed_results
-
-    def _format_field_value(self, value: Any) -> Any:
-        """Format field values with appropriate data types."""
-        if value is None:
-            return None
-
-        # If it's already a string, check if it looks like a date, number, or boolean
-        if isinstance(value, str):
-            # Try to detect and convert common data types
-            value_lower = value.lower().strip()
-
-            # Boolean detection
-            if value_lower in ('true', 'false'):
-                return value_lower == 'true'
-
-            # Null detection
-            if value_lower in ('null', 'none', ''):
-                return None
-
-            # Date detection (ISO format)
-            if len(value) >= 19 and ('T' in value or '-' in value[:10]):
-                try:
-                    # Try parsing as datetime
-                    dt = datetime.fromisoformat(value.replace('Z', '+00:00'))
-                    return dt.isoformat()
-                except (ValueError, TypeError):
-                    pass
-
-            # Number detection
-            try:
-                # Try integer first
-                if '.' not in value and 'e' not in value_lower:
-                    return int(value)
-                else:
-                    return float(value)
-            except (ValueError, TypeError):
-                pass
-
-        # Return as-is if no conversion applies
-        return value

@@ -587,12 +587,9 @@ class TestListEventDataStores:
 
         result = await tools.list_event_data_stores(mock_context)
 
-        assert len(result['event_data_stores']) == 2
-        assert result['event_data_stores'][0]['name'] == 'MyEventDataStore'
-        assert result['event_data_stores'][1]['multi_region_enabled'] is True
-        assert 'summary' in result
-        assert result['summary']['total_stores'] == 2
-        assert result['summary']['active_stores'] == 2
+        assert len(result) == 2
+        assert result[0]['name'] == 'MyEventDataStore'
+        assert result[1]['multi_region_enabled'] is True
 
         mock_client.list_event_data_stores.assert_called_once()
 
@@ -614,7 +611,7 @@ class TestListEventDataStores:
 
         result = await tools.list_event_data_stores(mock_context, include_details=True)
 
-        assert len(result['event_data_stores']) == 2
+        assert len(result) == 2
 
         # Verify get_event_data_store was called for each EDS
         assert mock_client.get_event_data_store.call_count == 2
@@ -631,7 +628,7 @@ class TestListEventDataStores:
 
         result = await tools.list_event_data_stores(mock_context, include_details=False)
 
-        assert len(result['event_data_stores']) == 2
+        assert len(result) == 2
 
         # Verify get_event_data_store was not called
         mock_client.get_event_data_store.assert_not_called()
@@ -649,8 +646,7 @@ class TestListEventDataStores:
 
         result = await tools.list_event_data_stores(mock_context, region='us-west-2')
 
-        assert len(result['event_data_stores']) == 2
-        assert result['region'] == 'us-west-2'
+        assert len(result) == 2
 
         # Verify client was created with correct region
         mock_get_client.assert_called_with('us-west-2')
@@ -665,9 +661,7 @@ class TestListEventDataStores:
 
         result = await tools.list_event_data_stores(mock_context)
 
-        assert len(result['event_data_stores']) == 0
-        assert result['summary']['total_stores'] == 0
-        assert 'summary' in result
+        assert len(result) == 0
 
     @pytest.mark.asyncio
     @patch.object(CloudTrailTools, '_get_cloudtrail_client')
@@ -683,7 +677,7 @@ class TestListEventDataStores:
         # Should not raise exception, but log warning
         result = await tools.list_event_data_stores(mock_context, include_details=True)
 
-        assert len(result['event_data_stores']) == 2
+        assert len(result) == 2
         # Should still return basic info even if details fail
 
     @pytest.mark.asyncio
@@ -701,95 +695,6 @@ class TestListEventDataStores:
 
         # Verify error was logged to context
         mock_context.error.assert_called_once()
-
-
-class TestUtilityFunctions:
-    """Test utility functions in CloudTrailTools."""
-
-    @pytest.fixture
-    def tools(self):
-        """Create CloudTrailTools instance."""
-        return CloudTrailTools()
-
-    def test_process_query_results_empty(self, tools):
-        """Test _process_query_results with empty input."""
-        result = tools._process_query_results([])
-        assert result == []
-
-    def test_process_query_results_invalid_input(self, tools):
-        """Test _process_query_results with invalid input."""
-        result = tools._process_query_results([None, [], {}])
-        assert result == []
-
-    def test_process_query_results_valid_data(self, tools):
-        """Test _process_query_results with valid field/value data."""
-        raw_results = [
-            [{'field': 'eventName', 'value': 'ConsoleLogin'}, {'field': 'count', 'value': '5'}],
-            [{'field': 'eventName', 'value': 'CreateUser'}, {'field': 'count', 'value': '2'}],
-        ]
-
-        result = tools._process_query_results(raw_results)
-
-        assert len(result) == 2
-        assert result[0]['eventName'] == 'ConsoleLogin'
-        assert result[0]['count'] == 5  # Should be converted to int
-        assert result[1]['eventName'] == 'CreateUser'
-        assert result[1]['count'] == 2
-
-    def test_format_field_value_string(self, tools):
-        """Test _format_field_value with string values."""
-        assert tools._format_field_value('hello') == 'hello'
-        assert tools._format_field_value('') is None
-        assert tools._format_field_value('null') is None
-        assert tools._format_field_value('None') is None
-
-    def test_format_field_value_boolean(self, tools):
-        """Test _format_field_value with boolean strings."""
-        assert tools._format_field_value('true') is True
-        assert tools._format_field_value('True') is True
-        assert tools._format_field_value('TRUE') is True
-        assert tools._format_field_value('false') is False
-        assert tools._format_field_value('False') is False
-        assert tools._format_field_value('FALSE') is False
-
-    def test_format_field_value_numbers(self, tools):
-        """Test _format_field_value with numeric strings."""
-        assert tools._format_field_value('123') == 123
-        assert tools._format_field_value('0') == 0
-        assert tools._format_field_value('-456') == -456
-        assert tools._format_field_value('123.45') == 123.45
-        assert tools._format_field_value('1.23e4') == 12300.0
-
-    def test_format_field_value_dates(self, tools):
-        """Test _format_field_value with date strings."""
-        # ISO format dates
-        date_str = '2023-01-01T12:00:00Z'
-        result = tools._format_field_value(date_str)
-        assert '2023-01-01T12:00:00' in result
-
-        # Date with timezone
-        date_str = '2023-01-01T12:00:00+00:00'
-        result = tools._format_field_value(date_str)
-        assert '2023-01-01' in result
-
-    def test_format_field_value_none_and_other_types(self, tools):
-        """Test _format_field_value with None and other types."""
-        assert tools._format_field_value(None) is None
-        assert tools._format_field_value(123) == 123
-        assert tools._format_field_value([1, 2, 3]) == [1, 2, 3]
-        assert tools._format_field_value({'key': 'value'}) == {'key': 'value'}
-
-    def test_format_field_value_invalid_dates(self, tools):
-        """Test _format_field_value with invalid date strings."""
-        # Should return as-is if date parsing fails
-        assert tools._format_field_value('not-a-date-2023') == 'not-a-date-2023'
-        assert tools._format_field_value('2023-13-45') == '2023-13-45'
-
-    def test_format_field_value_invalid_numbers(self, tools):
-        """Test _format_field_value with invalid number strings."""
-        # Should return as-is if number parsing fails
-        assert tools._format_field_value('not-a-number') == 'not-a-number'
-        assert tools._format_field_value('123.45.67') == '123.45.67'
 
 
 class TestToolRegistration:
