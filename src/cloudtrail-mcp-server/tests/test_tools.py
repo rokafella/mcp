@@ -399,7 +399,7 @@ class TestLakeQuery:
         # Verify calls were made
         mock_client.start_query.assert_called_once_with(QueryStatement=sql)
         mock_client.describe_query.assert_called_with(QueryId='query-123')
-        mock_client.get_query_results.assert_called_with(QueryId='query-123', MaxQueryResults=1000)
+        mock_client.get_query_results.assert_called_with(QueryId='query-123', MaxQueryResults=50)
 
     @pytest.mark.asyncio
     @patch.object(CloudTrailTools, '_get_cloudtrail_client')
@@ -476,6 +476,35 @@ class TestLakeQuery:
         assert result.query_id == 'query-fail'
         assert result.query_status == 'FAILED'
         assert result.error_message == 'SQL syntax error'
+
+    @pytest.mark.asyncio
+    @patch.object(CloudTrailTools, '_get_cloudtrail_client')
+    async def test_lake_query_wait_for_completion_false(
+        self, mock_get_client, tools, mock_context
+    ):
+        """Test lake_query with wait_for_completion=False."""
+        mock_client = Mock()
+        mock_get_client.return_value = mock_client
+        mock_client.start_query.return_value = {'QueryId': 'query-async-123'}
+        mock_client.describe_query.return_value = {
+            'QueryId': 'query-async-123',
+            'QueryStatus': 'RUNNING',
+            'QueryStatistics': {},
+        }
+
+        sql = 'SELECT * FROM eds-async'
+        result = await tools.lake_query(mock_context, sql=sql, wait_for_completion=False)
+
+        assert isinstance(result, QueryResult)
+        assert result.query_id == 'query-async-123'
+        assert result.query_status == 'RUNNING'
+        assert result.query_result_rows is None
+        assert result.next_token is None
+
+        # Verify start_query was called but get_query_results was not
+        mock_client.start_query.assert_called_once_with(QueryStatement=sql)
+        mock_client.describe_query.assert_called_once_with(QueryId='query-async-123')
+        mock_client.get_query_results.assert_not_called()
 
     @pytest.mark.asyncio
     @patch.object(CloudTrailTools, '_get_cloudtrail_client')
@@ -593,6 +622,267 @@ class TestGetQueryStatus:
 
         with pytest.raises(Exception, match='Query not found'):
             await tools.get_query_status(mock_context, query_id='nonexistent-query')
+
+        # Verify error was logged to context
+        mock_context.error.assert_called_once()
+
+
+class TestGetQueryResults:
+    """Test the get_query_results tool."""
+
+    @pytest.fixture
+    def tools(self):
+        """Create CloudTrailTools instance."""
+        return CloudTrailTools()
+
+    @pytest.fixture
+    def mock_context(self):
+        """Create mock Context."""
+        return AsyncMock(spec=Context)
+
+    @pytest.fixture
+    def sample_query_results(self):
+        """Sample query results for testing."""
+        return {
+            'QueryResultRows': [
+                [{'VarCharValue': 'ConsoleLogin'}, {'VarCharValue': '15'}],
+                [{'VarCharValue': 'CreateUser'}, {'VarCharValue': '8'}],
+                [{'VarCharValue': 'DeleteUser'}, {'VarCharValue': '3'}],
+            ],
+            'NextToken': 'pagination-token-abc123',
+        }
+
+    @pytest.fixture
+    def sample_query_status(self):
+        """Sample query status for testing."""
+        return {
+            'QueryId': 'query-results-123',
+            'QueryStatus': 'FINISHED',
+            'QueryStatistics': {
+                'ResultsCount': 100,
+                'TotalBytesScanned': 4096,
+                'ExecutionTimeInMillis': 2500,
+            },
+        }
+
+    @pytest.mark.asyncio
+    @patch.object(CloudTrailTools, '_get_cloudtrail_client')
+    async def test_get_query_results_basic(
+        self, mock_get_client, tools, mock_context, sample_query_results, sample_query_status
+    ):
+        """Test basic get_query_results functionality."""
+        mock_client = Mock()
+        mock_get_client.return_value = mock_client
+        mock_client.get_query_results.return_value = sample_query_results
+        mock_client.describe_query.return_value = sample_query_status
+
+        result = await tools.get_query_results(mock_context, query_id='query-results-123')
+
+        assert isinstance(result, QueryResult)
+        assert result.query_id == 'query-results-123'
+        assert result.query_status == 'FINISHED'
+        assert result.query_result_rows is not None
+        assert len(result.query_result_rows) == 3
+        assert result.next_token == 'pagination-token-abc123'
+        assert result.query_statistics is not None
+        assert result.query_statistics['ResultsCount'] == 100
+
+        # Verify calls were made
+        mock_client.get_query_results.assert_called_once_with(
+            QueryId='query-results-123', MaxQueryResults=50
+        )
+        mock_client.describe_query.assert_called_once_with(QueryId='query-results-123')
+
+    @pytest.mark.asyncio
+    @patch.object(CloudTrailTools, '_get_cloudtrail_client')
+    async def test_get_query_results_with_max_results(
+        self, mock_get_client, tools, mock_context, sample_query_results, sample_query_status
+    ):
+        """Test get_query_results with custom max_results."""
+        mock_client = Mock()
+        mock_get_client.return_value = mock_client
+        mock_client.get_query_results.return_value = sample_query_results
+        mock_client.describe_query.return_value = sample_query_status
+
+        result = await tools.get_query_results(
+            mock_context, query_id='query-results-123', max_results=50
+        )
+
+        assert isinstance(result, QueryResult)
+        assert len(result.query_result_rows) == 3
+
+        # Verify max_results was passed correctly
+        mock_client.get_query_results.assert_called_once_with(
+            QueryId='query-results-123', MaxQueryResults=50
+        )
+
+    @pytest.mark.asyncio
+    @patch.object(CloudTrailTools, '_get_cloudtrail_client')
+    async def test_get_query_results_with_next_token(
+        self, mock_get_client, tools, mock_context, sample_query_results, sample_query_status
+    ):
+        """Test get_query_results with next_token for pagination."""
+        mock_client = Mock()
+        mock_get_client.return_value = mock_client
+        mock_client.get_query_results.return_value = {
+            'QueryResultRows': [
+                [{'VarCharValue': 'ModifyUser'}, {'VarCharValue': '5'}],
+            ],
+            'NextToken': 'next-page-token-def456',
+        }
+        mock_client.describe_query.return_value = sample_query_status
+
+        result = await tools.get_query_results(
+            mock_context, query_id='query-results-123', next_token='previous-token-xyz'
+        )
+
+        assert isinstance(result, QueryResult)
+        assert len(result.query_result_rows) == 1
+        assert result.next_token == 'next-page-token-def456'
+
+        # Verify next_token was passed correctly
+        mock_client.get_query_results.assert_called_once_with(
+            QueryId='query-results-123', MaxQueryResults=50, NextToken='previous-token-xyz'
+        )
+
+    @pytest.mark.asyncio
+    @patch.object(CloudTrailTools, '_get_cloudtrail_client')
+    async def test_get_query_results_last_page(
+        self, mock_get_client, tools, mock_context, sample_query_status
+    ):
+        """Test get_query_results on last page (no next_token in response)."""
+        mock_client = Mock()
+        mock_get_client.return_value = mock_client
+        mock_client.get_query_results.return_value = {
+            'QueryResultRows': [
+                [{'VarCharValue': 'LastEvent'}, {'VarCharValue': '1'}],
+            ]
+            # No NextToken in response - indicates last page
+        }
+        mock_client.describe_query.return_value = sample_query_status
+
+        result = await tools.get_query_results(mock_context, query_id='query-results-123')
+
+        assert isinstance(result, QueryResult)
+        assert len(result.query_result_rows) == 1
+        assert result.next_token is None  # Should be None on last page
+
+    @pytest.mark.asyncio
+    @patch.object(CloudTrailTools, '_get_cloudtrail_client')
+    async def test_get_query_results_empty_results(
+        self, mock_get_client, tools, mock_context, sample_query_status
+    ):
+        """Test get_query_results with empty results."""
+        mock_client = Mock()
+        mock_get_client.return_value = mock_client
+        mock_client.get_query_results.return_value = {'QueryResultRows': []}
+        mock_client.describe_query.return_value = sample_query_status
+
+        result = await tools.get_query_results(mock_context, query_id='query-results-123')
+
+        assert isinstance(result, QueryResult)
+        assert len(result.query_result_rows) == 0
+        assert result.next_token is None
+
+    @pytest.mark.asyncio
+    @patch.object(CloudTrailTools, '_get_cloudtrail_client')
+    async def test_get_query_results_different_region(
+        self, mock_get_client, tools, mock_context, sample_query_results, sample_query_status
+    ):
+        """Test get_query_results with different AWS region."""
+        mock_client = Mock()
+        mock_get_client.return_value = mock_client
+        mock_client.get_query_results.return_value = sample_query_results
+        mock_client.describe_query.return_value = sample_query_status
+
+        result = await tools.get_query_results(
+            mock_context, query_id='query-results-123', region='eu-west-1'
+        )
+
+        assert isinstance(result, QueryResult)
+        assert len(result.query_result_rows) == 3
+
+        # Verify client was created with correct region
+        mock_get_client.assert_called_with('eu-west-1')
+
+    @pytest.mark.asyncio
+    @patch.object(CloudTrailTools, '_get_cloudtrail_client')
+    async def test_get_query_results_max_results_boundary(
+        self, mock_get_client, tools, mock_context, sample_query_results, sample_query_status
+    ):
+        """Test get_query_results max_results boundary conditions."""
+        mock_client = Mock()
+        mock_get_client.return_value = mock_client
+        mock_client.get_query_results.return_value = sample_query_results
+        mock_client.describe_query.return_value = sample_query_status
+
+        # Test various max_results values
+        test_cases = [
+            (None, 50),  # Default
+            (1, 1),  # Minimum
+            (50, 50),  # Maximum
+            (0, 1),  # Below minimum should be adjusted
+            (100, 50),  # Above maximum should be adjusted
+        ]
+
+        for input_val, expected_val in test_cases:
+            await tools.get_query_results(
+                mock_context, query_id='query-results-123', max_results=input_val
+            )
+            call_kwargs = mock_client.get_query_results.call_args[1]
+            assert call_kwargs['MaxQueryResults'] == expected_val
+
+    @pytest.mark.asyncio
+    @patch.object(CloudTrailTools, '_get_cloudtrail_client')
+    async def test_get_query_results_failed_query(
+        self, mock_get_client, tools, mock_context, sample_query_results
+    ):
+        """Test get_query_results with failed query status."""
+        mock_client = Mock()
+        mock_get_client.return_value = mock_client
+        mock_client.get_query_results.return_value = sample_query_results
+        mock_client.describe_query.return_value = {
+            'QueryId': 'query-failed-123',
+            'QueryStatus': 'FAILED',
+            'ErrorMessage': 'Query execution failed',
+            'QueryStatistics': {},
+        }
+
+        result = await tools.get_query_results(mock_context, query_id='query-failed-123')
+
+        assert isinstance(result, QueryResult)
+        assert result.query_id == 'query-failed-123'
+        assert result.query_status == 'FAILED'
+        assert result.error_message == 'Query execution failed'
+        assert len(result.query_result_rows) == 3  # Still returns results if available
+
+    @pytest.mark.asyncio
+    @patch.object(CloudTrailTools, '_get_cloudtrail_client')
+    async def test_get_query_results_error_handling(self, mock_get_client, tools, mock_context):
+        """Test get_query_results error handling."""
+        mock_client = Mock()
+        mock_get_client.return_value = mock_client
+        mock_client.get_query_results.side_effect = Exception('Query results not available')
+
+        with pytest.raises(Exception, match='Query results not available'):
+            await tools.get_query_results(mock_context, query_id='nonexistent-query')
+
+        # Verify error was logged to context
+        mock_context.error.assert_called_once()
+
+    @pytest.mark.asyncio
+    @patch.object(CloudTrailTools, '_get_cloudtrail_client')
+    async def test_get_query_results_describe_query_error(
+        self, mock_get_client, tools, mock_context, sample_query_results
+    ):
+        """Test get_query_results when describe_query fails."""
+        mock_client = Mock()
+        mock_get_client.return_value = mock_client
+        mock_client.get_query_results.return_value = sample_query_results
+        mock_client.describe_query.side_effect = Exception('Query status not available')
+
+        with pytest.raises(Exception, match='Query status not available'):
+            await tools.get_query_results(mock_context, query_id='query-results-123')
 
         # Verify error was logged to context
         mock_context.error.assert_called_once()
@@ -795,14 +1085,15 @@ class TestToolRegistration:
             call(name='lookup_events'),
             call(name='lake_query'),
             call(name='get_query_status'),
+            call(name='get_query_results'),
             call(name='list_event_data_stores'),
         ]
 
-        assert mock_mcp.tool.call_count == 4
+        assert mock_mcp.tool.call_count == 5
         mock_mcp.tool.assert_has_calls(expected_calls, any_order=True)
 
         # Verify decorators were applied
-        assert mock_tool_decorator.call_count == 4
+        assert mock_tool_decorator.call_count == 5
 
 
 class TestEdgeCases:

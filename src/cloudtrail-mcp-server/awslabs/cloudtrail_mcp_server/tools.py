@@ -77,6 +77,9 @@ class CloudTrailTools:
         # Register get_query_status tool
         mcp.tool(name='get_query_status')(self.get_query_status)
 
+        # Register get_query_results tool
+        mcp.tool(name='get_query_results')(self.get_query_results)
+
         # Register list_event_data_stores tool
         mcp.tool(name='list_event_data_stores')(self.list_event_data_stores)
 
@@ -245,6 +248,12 @@ class CloudTrailTools:
                 description="SQL query to execute against CloudTrail Lake. IMPORTANT: You must include a valid Event Data Store (EDS) ID in the FROM clause of your SQL query. Use list_event_data_stores tool to get available EDS IDs first. CloudTrail Lake only supports SELECT statements using Trino-compatible SQL syntax. Example: SELECT * FROM 0233062b-51c6-4d18-8dec-a8c90da840d9 WHERE eventname = 'ConsoleLogin'"
             ),
         ],
+        wait_for_completion: Annotated[
+            bool,
+            Field(
+                description='Whether to wait for query completion and return results. If False, returns immediately with query_id for manual result fetching using get_query_results. Default: True'
+            ),
+        ] = True,
         region: Annotated[
             str,
             Field(description='AWS region to query. Defaults to us-east-1.'),
@@ -255,6 +264,11 @@ class CloudTrailTools:
         CloudTrail Lake allows you to run SQL queries against your CloudTrail events for advanced
         analysis. This is more powerful than the basic lookup functions and allows for complex
         filtering, aggregation, and analysis.
+
+        PAGINATION WORKFLOW:
+        For large result sets, you have two options:
+        1. Use wait_for_completion=False to get the query_id immediately, then use get_query_results with pagination
+        2. Use wait_for_completion=True (default) to get first page of results, then use get_query_results with next_token for additional pages
 
         IMPORTANT LIMITATIONS:
         - CloudTrail Lake only supports SELECT statements using Trino-compatible SQL syntax
@@ -273,7 +287,8 @@ class CloudTrailTools:
         QueryResult containing:
             - query_id: Unique identifier for the query
             - query_status: Current status of the query
-            - query_result_rows: Results if query completed successfully
+            - query_result_rows: Results if query completed successfully (only when wait_for_completion=True)
+            - next_token: Token for pagination (only when wait_for_completion=True and results are paginated)
             - query_statistics: Performance statistics for the query
         """
         try:
@@ -290,6 +305,17 @@ class CloudTrailTools:
 
             query_id = start_response['QueryId']
             logger.info(f'Started query with ID: {query_id}')
+
+            # If not waiting for completion, return immediately with query_id
+            if not wait_for_completion:
+                # Get initial status to return
+                initial_status = cloudtrail_client.describe_query(QueryId=query_id)
+                return QueryResult(
+                    query_id=query_id,
+                    query_status=initial_status['QueryStatus'],
+                    query_statistics=initial_status.get('QueryStatistics'),
+                    error_message=initial_status.get('ErrorMessage'),
+                )
 
             # Poll for completion (with a reasonable timeout)
             max_wait_time = 300  # 5 minutes
@@ -313,7 +339,7 @@ class CloudTrailTools:
             # Get final results
             if query_status == 'FINISHED':
                 results_response = cloudtrail_client.get_query_results(
-                    QueryId=query_id, MaxQueryResults=1000
+                    QueryId=query_id, MaxQueryResults=50
                 )
 
                 raw_results = results_response.get('QueryResultRows', [])
@@ -385,6 +411,88 @@ class CloudTrailTools:
         except Exception as e:
             logger.error(f'Error in get_query_status: {str(e)}')
             await ctx.error(f'Error getting query status: {str(e)}')
+            raise
+
+    async def get_query_results(
+        self,
+        ctx: Context,
+        query_id: Annotated[str, Field(description='The ID of the query to get results for')],
+        max_results: Annotated[
+            Optional[int],
+            Field(description='Maximum number of results to return per page (1-50, default: 50)'),
+        ] = None,
+        next_token: Annotated[
+            Optional[str],
+            Field(
+                description='Token for pagination to fetch the next page of results. Use the next_token returned from a previous call to get successive pages.'
+            ),
+        ] = None,
+        region: Annotated[
+            str,
+            Field(description='AWS region to query. Defaults to us-east-1.'),
+        ] = 'us-east-1',
+    ) -> QueryResult:
+        """Get the results of a completed CloudTrail Lake query with pagination support.
+
+        This tool retrieves the results of a previously executed CloudTrail Lake query. It supports
+        pagination for large result sets, allowing you to fetch results in chunks.
+
+        Usage: Use this tool to get the results of a query that has completed (status = 'FINISHED').
+        For large result sets, use the next_token to fetch subsequent pages of results.
+
+        Pagination workflow:
+        1. Call get_query_results with just the query_id to get the first page
+        2. If next_token is returned, call again with the same query_id and the next_token
+        3. Repeat until next_token is null/empty
+
+        Returns:
+        --------
+        QueryResult containing:
+            - query_id: The query identifier
+            - query_status: Current status of the query
+            - query_result_rows: Results for this page
+            - next_token: Token for next page (null if no more pages)
+            - query_statistics: Performance statistics for the query
+        """
+        try:
+            # Create CloudTrail client for the specified region
+            cloudtrail_client = self._get_cloudtrail_client(region)
+
+            logger.info(f'Getting results for query {query_id} in region {region}')
+
+            # Validate max_results
+            max_results = validate_max_results(max_results, default=50, max_allowed=50)
+
+            # Build parameters for get_query_results
+            params = {
+                'QueryId': query_id,
+                'MaxQueryResults': max_results,
+            }
+
+            # Add next_token for pagination if provided
+            if next_token:
+                params['NextToken'] = next_token
+
+            logger.info(f'Getting query results with params: {params}')
+
+            # Get the query results
+            results_response = cloudtrail_client.get_query_results(**remove_null_values(params))
+
+            # Also get the query status to include it in the response
+            status_response = cloudtrail_client.describe_query(QueryId=query_id)
+
+            return QueryResult(
+                query_id=query_id,
+                query_status=status_response['QueryStatus'],
+                query_statistics=status_response.get('QueryStatistics'),
+                query_result_rows=results_response.get('QueryResultRows', []),
+                next_token=results_response.get('NextToken'),
+                error_message=status_response.get('ErrorMessage'),
+            )
+
+        except Exception as e:
+            logger.error(f'Error in get_query_results: {str(e)}')
+            await ctx.error(f'Error getting query results: {str(e)}')
             raise
 
     async def list_event_data_stores(
