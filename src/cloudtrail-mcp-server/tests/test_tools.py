@@ -368,10 +368,12 @@ class TestLakeQuery:
 
     @pytest.mark.asyncio
     @patch.object(CloudTrailTools, '_get_cloudtrail_client')
+    @patch.object(CloudTrailTools, 'get_query_results')
     @patch('time.sleep')  # Mock sleep to speed up tests
     async def test_lake_query_basic(
         self,
         mock_sleep,
+        mock_get_query_results,
         mock_get_client,
         tools,
         mock_context,
@@ -383,7 +385,15 @@ class TestLakeQuery:
         mock_get_client.return_value = mock_client
         mock_client.start_query.return_value = {'QueryId': 'query-123'}
         mock_client.describe_query.return_value = sample_query_result
-        mock_client.get_query_results.return_value = sample_query_data
+
+        # Mock the get_query_results method to return a QueryResult object
+        mock_get_query_results.return_value = QueryResult(
+            query_id='query-123',
+            query_status='FINISHED',
+            query_statistics=sample_query_result.get('QueryStatistics'),
+            query_result_rows=sample_query_data.get('QueryResultRows', []),
+            next_token=sample_query_data.get('NextToken'),
+        )
 
         sql = 'SELECT eventName, count(*) FROM eds-123 GROUP BY eventName'
         result = await tools.lake_query(mock_context, sql=sql)
@@ -392,21 +402,29 @@ class TestLakeQuery:
         assert result.query_id == 'query-123'
         assert result.query_status == 'FINISHED'
         assert result.query_result_rows is not None
-        assert len(result.query_result_rows) == 2
+        assert len(result.query_result_rows or []) == 2
         assert result.query_statistics is not None
         assert result.query_statistics['ResultsCount'] == 2
 
         # Verify calls were made
         mock_client.start_query.assert_called_once_with(QueryStatement=sql)
         mock_client.describe_query.assert_called_with(QueryId='query-123')
-        mock_client.get_query_results.assert_called_with(QueryId='query-123', MaxQueryResults=50)
+        mock_get_query_results.assert_called_once_with(
+            ctx=mock_context,
+            query_id='query-123',
+            max_results=50,
+            next_token=None,
+            region='us-east-1',
+        )
 
     @pytest.mark.asyncio
     @patch.object(CloudTrailTools, '_get_cloudtrail_client')
+    @patch.object(CloudTrailTools, 'get_query_results')
     @patch('time.sleep')
     async def test_lake_query_different_region(
         self,
         mock_sleep,
+        mock_get_query_results,
         mock_get_client,
         tools,
         mock_context,
@@ -418,7 +436,15 @@ class TestLakeQuery:
         mock_get_client.return_value = mock_client
         mock_client.start_query.return_value = {'QueryId': 'query-456'}
         mock_client.describe_query.return_value = sample_query_result
-        mock_client.get_query_results.return_value = sample_query_data
+
+        # Mock the get_query_results method to return a QueryResult object
+        mock_get_query_results.return_value = QueryResult(
+            query_id='query-456',
+            query_status='FINISHED',
+            query_statistics=sample_query_result.get('QueryStatistics'),
+            query_result_rows=sample_query_data.get('QueryResultRows', []),
+            next_token=sample_query_data.get('NextToken'),
+        )
 
         sql = 'SELECT * FROM eds-456'
         result = await tools.lake_query(mock_context, sql=sql, region='eu-west-1')
@@ -427,6 +453,15 @@ class TestLakeQuery:
 
         # Verify client was created with correct region
         mock_get_client.assert_called_with('eu-west-1')
+
+        # Verify get_query_results was called with correct region
+        mock_get_query_results.assert_called_once_with(
+            ctx=mock_context,
+            query_id='query-456',
+            max_results=50,
+            next_token=None,
+            region='eu-west-1',
+        )
 
     @pytest.mark.asyncio
     @patch.object(CloudTrailTools, '_get_cloudtrail_client')
@@ -682,7 +717,7 @@ class TestGetQueryResults:
         assert result.query_id == 'query-results-123'
         assert result.query_status == 'FINISHED'
         assert result.query_result_rows is not None
-        assert len(result.query_result_rows) == 3
+        assert len(result.query_result_rows or []) == 3
         assert result.next_token == 'pagination-token-abc123'
         assert result.query_statistics is not None
         assert result.query_statistics['ResultsCount'] == 100
@@ -709,7 +744,7 @@ class TestGetQueryResults:
         )
 
         assert isinstance(result, QueryResult)
-        assert len(result.query_result_rows) == 3
+        assert len(result.query_result_rows or []) == 3
 
         # Verify max_results was passed correctly
         mock_client.get_query_results.assert_called_once_with(
@@ -737,7 +772,7 @@ class TestGetQueryResults:
         )
 
         assert isinstance(result, QueryResult)
-        assert len(result.query_result_rows) == 1
+        assert len(result.query_result_rows or []) == 1
         assert result.next_token == 'next-page-token-def456'
 
         # Verify next_token was passed correctly
@@ -764,7 +799,7 @@ class TestGetQueryResults:
         result = await tools.get_query_results(mock_context, query_id='query-results-123')
 
         assert isinstance(result, QueryResult)
-        assert len(result.query_result_rows) == 1
+        assert len(result.query_result_rows or []) == 1
         assert result.next_token is None  # Should be None on last page
 
     @pytest.mark.asyncio
@@ -781,7 +816,7 @@ class TestGetQueryResults:
         result = await tools.get_query_results(mock_context, query_id='query-results-123')
 
         assert isinstance(result, QueryResult)
-        assert len(result.query_result_rows) == 0
+        assert len(result.query_result_rows or []) == 0
         assert result.next_token is None
 
     @pytest.mark.asyncio
@@ -1227,6 +1262,11 @@ class TestModels:
         assert result.query_statistics['ResultsCount'] == 0
         assert result.next_token is None
         assert result.error_message is None
+
+        # Test that None values are excluded from serialization
+        result_dict = result.model_dump()
+        assert 'next_token' not in result_dict
+        assert 'error_message' not in result_dict
 
     def test_query_status_model(self):
         """Test QueryStatus model creation and validation."""

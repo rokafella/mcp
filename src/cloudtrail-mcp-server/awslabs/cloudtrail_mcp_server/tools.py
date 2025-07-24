@@ -338,18 +338,9 @@ class CloudTrailTools:
 
             # Get final results
             if query_status == 'FINISHED':
-                results_response = cloudtrail_client.get_query_results(
-                    QueryId=query_id, MaxQueryResults=50
-                )
-
-                raw_results = results_response.get('QueryResultRows', [])
-
-                return QueryResult(
-                    query_id=query_id,
-                    query_status=query_status,
-                    query_statistics=status_response.get('QueryStatistics'),
-                    query_result_rows=raw_results,  # Keep original format for compatibility
-                    next_token=results_response.get('NextToken'),
+                # Use the existing get_query_results method for consistency and better error handling
+                return await self.get_query_results(
+                    ctx=ctx, query_id=query_id, max_results=50, next_token=None, region=region
                 )
             else:
                 return QueryResult(

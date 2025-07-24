@@ -56,6 +56,11 @@ class QueryResult(BaseModel):
     next_token: Optional[str] = None
     error_message: Optional[str] = None
 
+    def model_dump(self, **kwargs):
+        """Override model_dump to exclude None values."""
+        kwargs.setdefault('exclude_none', True)
+        return super().model_dump(**kwargs)
+
 
 class QueryStatus(BaseModel):
     """Model for CloudTrail Lake query status."""
@@ -66,3 +71,8 @@ class QueryStatus(BaseModel):
     error_message: Optional[str] = None
     delivery_s3_uri: Optional[str] = None
     delivery_status: Optional[str] = None
+
+    def model_dump(self, **kwargs):
+        """Override model_dump to exclude None values."""
+        kwargs.setdefault('exclude_none', True)
+        return super().model_dump(**kwargs)
