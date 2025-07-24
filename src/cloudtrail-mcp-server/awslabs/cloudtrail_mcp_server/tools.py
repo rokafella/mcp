@@ -86,13 +86,13 @@ class CloudTrailTools:
         start_time: Annotated[
             Optional[str],
             Field(
-                description='Start time for event lookup (ISO format or relative like "1 day ago")'
+                description='Start time for event lookup (ISO format or relative like "1 day ago"). IMPORTANT: When using pagination (next_token), you must provide the exact same start_time as the original request.'
             ),
         ] = None,
         end_time: Annotated[
             Optional[str],
             Field(
-                description='End time for event lookup (ISO format or relative like "1 hour ago")'
+                description='End time for event lookup (ISO format or relative like "1 hour ago"). IMPORTANT: When using pagination (next_token), you must provide the exact same end_time as the original request.'
             ),
         ] = None,
         attribute_key: Annotated[
@@ -117,6 +117,12 @@ class CloudTrailTools:
             Optional[int],
             Field(description='Maximum number of events to return (1-50, default: 10)'),
         ] = None,
+        next_token: Annotated[
+            Optional[str],
+            Field(
+                description='Token for pagination to fetch the next page of events. IMPORTANT: When using this token, all other parameters (start_time, end_time, attribute_key, attribute_value) must match exactly the original request that generated this token.'
+            ),
+        ] = None,
         region: Annotated[
             str,
             Field(description='AWS region to query. Defaults to us-east-1.'),
@@ -131,26 +137,50 @@ class CloudTrailTools:
         Usage: Use this tool to find CloudTrail events by various attributes like username, event name,
         resource name, etc. This is useful for security investigations, troubleshooting, and audit trails.
 
+        IMPORTANT PAGINATION REQUIREMENTS:
+        - AWS CloudTrail requires pagination tokens to be used with exactly the same parameters as the original request
+        - When using next_token, you must provide the exact same start_time, end_time, attribute_key, and attribute_value
+        - Use the 'query_params' returned in the response for subsequent paginated requests
+
         Returns:
         --------
         Dictionary containing:
             - events: List of CloudTrail events matching the criteria with exact CloudTrail schema
             - next_token: Token for pagination if more results available
-            - query_params: Parameters used for the query
+            - query_params: Parameters used for the query (includes pagination parameters when next_token is present)
         """
         try:
             # Create CloudTrail client for the specified region
             cloudtrail_client = self._get_cloudtrail_client(region)
 
-            # Set default time range if not provided (last 24 hours)
-            if not start_time:
-                start_time = '1 day ago'
-            if not end_time:
-                end_time = 'now'
+            # Handle pagination case - when next_token is provided, we may or may not have explicit times
+            if next_token:
+                # If times are provided with pagination, use them (they should be in ISO format from previous response)
+                if start_time and end_time:
+                    try:
+                        # Try to parse as ISO format first (from previous pagination_params)
+                        start_dt = parse_time_input(start_time)
+                        end_dt = parse_time_input(end_time)
+                    except Exception as e:
+                        raise ValueError(
+                            f'Invalid time format for pagination. Use the exact start_time and end_time from the '
+                            f"'query_params' in the previous response. Error: {str(e)}"
+                        )
+                else:
+                    # If no explicit times with pagination, use defaults
+                    # The CloudTrail API will handle pagination correctly with just the next_token
+                    start_dt = parse_time_input('1 day ago')
+                    end_dt = parse_time_input('now')
+            else:
+                # First request - set defaults and parse normally
+                if not start_time:
+                    start_time = '1 day ago'
+                if not end_time:
+                    end_time = 'now'
 
-            # Parse time inputs
-            start_dt = parse_time_input(start_time)
-            end_dt = parse_time_input(end_time)
+                # Parse time inputs
+                start_dt = parse_time_input(start_time)
+                end_dt = parse_time_input(end_time)
 
             # Validate max_results
             max_results = validate_max_results(max_results, default=10, max_allowed=50)
@@ -168,6 +198,10 @@ class CloudTrailTools:
                     {'AttributeKey': attribute_key, 'AttributeValue': attribute_value}
                 ]
 
+            # Add next_token for pagination if provided
+            if next_token:
+                lookup_params['NextToken'] = next_token
+
             logger.info(f'Looking up CloudTrail events with params: {lookup_params}')
 
             # Call CloudTrail API
@@ -176,17 +210,20 @@ class CloudTrailTools:
             # Return events exactly as they come from CloudTrail API
             events = response.get('Events', [])
 
+            # Build result with consistent parameter format
+            query_params = {
+                'start_time': start_dt.isoformat(),
+                'end_time': end_dt.isoformat(),
+                'attribute_key': attribute_key,
+                'attribute_value': attribute_value,
+                'max_results': max_results,
+                'region': region,
+            }
+
             result = {
                 'events': events,
                 'next_token': response.get('NextToken'),
-                'query_params': {
-                    'start_time': start_dt.isoformat(),
-                    'end_time': end_dt.isoformat(),
-                    'attribute_key': attribute_key,
-                    'attribute_value': attribute_value,
-                    'max_results': max_results,
-                    'region': region,
-                },
+                'query_params': query_params,
             }
 
             logger.info(

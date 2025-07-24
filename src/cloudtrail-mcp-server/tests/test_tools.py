@@ -162,6 +162,7 @@ class TestLookupEvents:
         assert result['events'][0]['EventId'] == 'event-1'
         assert result['events'][1]['EventName'] == 'CreateUser'
         assert 'query_params' in result
+        assert 'next_token' not in result['query_params']
 
         # Verify client was called
         mock_client.lookup_events.assert_called_once()
@@ -233,6 +234,86 @@ class TestLookupEvents:
 
         # Verify client was created with correct region
         mock_get_client.assert_called_with('us-west-2')
+
+    @pytest.mark.asyncio
+    @patch.object(CloudTrailTools, '_get_cloudtrail_client')
+    async def test_lookup_events_with_next_token(
+        self, mock_get_client, tools, mock_context, sample_events
+    ):
+        """Test lookup_events with next_token for pagination."""
+        mock_client = Mock()
+        mock_get_client.return_value = mock_client
+        mock_client.lookup_events.return_value = {
+            'Events': sample_events,
+            'NextToken': 'new-next-token-456',
+        }
+
+        result = await tools.lookup_events(mock_context, next_token='previous-next-token-123')
+
+        assert len(result['events']) == 2
+        assert result['next_token'] == 'new-next-token-456'
+        assert 'next_token' not in result['query_params']
+
+        # Verify next_token was passed to API call
+        call_kwargs = mock_client.lookup_events.call_args[1]
+        assert 'NextToken' in call_kwargs
+        assert call_kwargs['NextToken'] == 'previous-next-token-123'
+
+    @pytest.mark.asyncio
+    @patch.object(CloudTrailTools, '_get_cloudtrail_client')
+    async def test_lookup_events_with_next_token_and_filters(
+        self, mock_get_client, tools, mock_context, sample_events
+    ):
+        """Test lookup_events with both next_token and attribute filters."""
+        mock_client = Mock()
+        mock_get_client.return_value = mock_client
+        mock_client.lookup_events.return_value = {
+            'Events': [sample_events[0]],
+            'NextToken': 'filtered-next-token-789',
+        }
+
+        result = await tools.lookup_events(
+            mock_context,
+            attribute_key='EventName',
+            attribute_value='ConsoleLogin',
+            next_token='pagination-token-456',
+            max_results=25,
+        )
+
+        assert len(result['events']) == 1
+        assert result['next_token'] == 'filtered-next-token-789'
+        assert 'next_token' not in result['query_params']
+
+        # Verify both filters and next_token were passed to API call
+        call_kwargs = mock_client.lookup_events.call_args[1]
+        assert 'NextToken' in call_kwargs
+        assert call_kwargs['NextToken'] == 'pagination-token-456'
+        assert 'LookupAttributes' in call_kwargs
+        assert call_kwargs['LookupAttributes'][0]['AttributeKey'] == 'EventName'
+        assert call_kwargs['LookupAttributes'][0]['AttributeValue'] == 'ConsoleLogin'
+        assert call_kwargs['MaxResults'] == 25
+
+    @pytest.mark.asyncio
+    @patch.object(CloudTrailTools, '_get_cloudtrail_client')
+    async def test_lookup_events_without_next_token_in_response(
+        self, mock_get_client, tools, mock_context, sample_events
+    ):
+        """Test lookup_events when response doesn't include NextToken (last page)."""
+        mock_client = Mock()
+        mock_get_client.return_value = mock_client
+        mock_client.lookup_events.return_value = {
+            'Events': sample_events
+            # No NextToken in response - indicates last page
+        }
+
+        result = await tools.lookup_events(mock_context)
+
+        assert len(result['events']) == 2
+        assert result['next_token'] is None  # Should be None when not in response
+
+        # Verify NextToken was not passed to API call when not provided
+        call_kwargs = mock_client.lookup_events.call_args[1]
+        assert 'NextToken' not in call_kwargs
 
     @pytest.mark.asyncio
     @patch.object(CloudTrailTools, '_get_cloudtrail_client')
