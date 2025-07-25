@@ -336,6 +336,7 @@ Interact with AWS HealthAI services.
 - **[Amazon CloudWatch Application Signals MCP Server](src/cloudwatch-appsignals-mcp-server/)** - Application monitoring and performance insights
 - **[AWS Cost Explorer MCP Server](src/cost-explorer-mcp-server/)** - Cost monitoring and spend analysis
 - **[AWS Managed Prometheus MCP Server](src/prometheus-mcp-server/)** - Prometheus-compatible operations
+- **[AWS CloudTrail MCP Server](src/cloudtrail-mcp-server/)** - CloudTrail events querying and analysis
 
 ## MCP AWS Lambda Handler Module
 
