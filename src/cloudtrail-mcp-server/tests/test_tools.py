@@ -219,7 +219,7 @@ class TestLookupEvents:
     async def test_lookup_events_with_next_token(
         self, mock_get_client, tools, mock_context, sample_events
     ):
-        """Test lookup_events with next_token for pagination."""
+        """Test lookup_events with next_token for pagination (requires both start_time and end_time)."""
         mock_client = Mock()
         mock_get_client.return_value = mock_client
         mock_client.lookup_events.return_value = {
@@ -227,7 +227,12 @@ class TestLookupEvents:
             'NextToken': 'new-next-token-456',
         }
 
-        result = await tools.lookup_events(mock_context, next_token='previous-next-token-123')
+        result = await tools.lookup_events(
+            mock_context,
+            start_time='2023-01-01T00:00:00Z',
+            end_time='2023-01-01T23:59:59Z',
+            next_token='previous-next-token-123',
+        )
 
         assert len(result['events']) == 2
         assert result['next_token'] == 'new-next-token-456'
@@ -253,6 +258,8 @@ class TestLookupEvents:
 
         result = await tools.lookup_events(
             mock_context,
+            start_time='2023-01-01T00:00:00Z',
+            end_time='2023-01-01T23:59:59Z',
             attribute_key='EventName',
             attribute_value='ConsoleLogin',
             next_token='pagination-token-456',
@@ -296,8 +303,83 @@ class TestLookupEvents:
 
     @pytest.mark.asyncio
     @patch.object(CloudTrailTools, '_get_cloudtrail_client')
+    async def test_lookup_events_pagination_missing_start_time_error(
+        self, mock_get_client, tools, mock_context
+    ):
+        """Test lookup_events with next_token but missing start_time raises ValueError."""
+        mock_client = Mock()
+        mock_get_client.return_value = mock_client
+
+        with pytest.raises(
+            ValueError, match='Both start_time and end_time are required when using pagination'
+        ):
+            await tools.lookup_events(
+                mock_context, end_time='2023-01-01T23:59:59Z', next_token='pagination-token-123'
+            )
+
+        # Verify no API call was made due to validation error
+        mock_client.lookup_events.assert_not_called()
+
+    @pytest.mark.asyncio
+    @patch.object(CloudTrailTools, '_get_cloudtrail_client')
+    async def test_lookup_events_pagination_missing_end_time_error(
+        self, mock_get_client, tools, mock_context
+    ):
+        """Test lookup_events with next_token but missing end_time raises ValueError."""
+        mock_client = Mock()
+        mock_get_client.return_value = mock_client
+
+        with pytest.raises(
+            ValueError, match='Both start_time and end_time are required when using pagination'
+        ):
+            await tools.lookup_events(
+                mock_context, start_time='2023-01-01T00:00:00Z', next_token='pagination-token-123'
+            )
+
+        # Verify no API call was made due to validation error
+        mock_client.lookup_events.assert_not_called()
+
+    @pytest.mark.asyncio
+    @patch.object(CloudTrailTools, '_get_cloudtrail_client')
+    async def test_lookup_events_pagination_missing_both_times_error(
+        self, mock_get_client, tools, mock_context
+    ):
+        """Test lookup_events with next_token but missing both start_time and end_time raises ValueError."""
+        mock_client = Mock()
+        mock_get_client.return_value = mock_client
+
+        with pytest.raises(
+            ValueError, match='Both start_time and end_time are required when using pagination'
+        ):
+            await tools.lookup_events(mock_context, next_token='pagination-token-123')
+
+        # Verify no API call was made due to validation error
+        mock_client.lookup_events.assert_not_called()
+
+    @pytest.mark.asyncio
+    @patch.object(CloudTrailTools, '_get_cloudtrail_client')
+    async def test_lookup_events_pagination_invalid_time_format_error(
+        self, mock_get_client, tools, mock_context
+    ):
+        """Test lookup_events with invalid time format during pagination raises ValueError."""
+        mock_client = Mock()
+        mock_get_client.return_value = mock_client
+
+        with pytest.raises(ValueError, match='Invalid time format for pagination'):
+            await tools.lookup_events(
+                mock_context,
+                start_time='invalid-time-format',
+                end_time='2023-01-01T23:59:59Z',
+                next_token='pagination-token-123',
+            )
+
+        # Verify no API call was made due to validation error
+        mock_client.lookup_events.assert_not_called()
+
+    @pytest.mark.asyncio
+    @patch.object(CloudTrailTools, '_get_cloudtrail_client')
     async def test_lookup_events_error_handling(self, mock_get_client, tools, mock_context):
-        """Test lookup_events error handling."""
+        """Test lookup_events general AWS API error handling."""
         mock_client = Mock()
         mock_get_client.return_value = mock_client
         mock_client.lookup_events.side_effect = Exception('AWS Error')

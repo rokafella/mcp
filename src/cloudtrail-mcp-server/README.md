@@ -19,7 +19,7 @@ The CloudTrail MCP Server provides specialized tools to address common security 
 **Event Data Store Management** - List and explore available CloudTrail Lake Event Data Stores to understand data sources and capabilities.
 
 ## Prerequisites
-1. An AWS account with [CloudTrail](https://docs.aws.amazon.com/awscloudtrail/latest/userguide/cloudtrail-user-guide.html) enabled.
+1. An AWS account with [CloudTrail](https://docs.aws.amazon.com/awscloudtrail/latest/userguide/cloudtrail-user-guide.html) enabled. CloudTrail Event History is enabled by default. CloudTrail Lake needs to be enabled for advance SQL queries.
 2. This MCP server can only be run locally on the same host as your LLM client.
 3. Set up AWS credentials with access to AWS services
    - You need an AWS account with appropriate permissions (See required permissions below)

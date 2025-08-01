@@ -147,32 +147,27 @@ class CloudTrailTools:
             # Create CloudTrail client for the specified region
             cloudtrail_client = self._get_cloudtrail_client(region)
 
-            # Handle pagination case - when next_token is provided, we may or may not have explicit times
+            # Handle time input validation and parsing
             if next_token:
-                # If times are provided with pagination, use them (they should be in ISO format from previous response)
-                if start_time and end_time:
-                    try:
-                        # Try to parse as ISO format first (from previous pagination_params)
-                        start_dt = parse_time_input(start_time)
-                        end_dt = parse_time_input(end_time)
-                    except Exception as e:
-                        raise ValueError(
-                            f'Invalid time format for pagination. Use the exact start_time and end_time from the '
-                            f"'query_params' in the previous response. Error: {str(e)}"
-                        )
-                else:
-                    # If no explicit times with pagination, use defaults
-                    # The CloudTrail API will handle pagination correctly with just the next_token
-                    start_dt = parse_time_input('1 day ago')
-                    end_dt = parse_time_input('now')
+                # When using pagination, both start_time and end_time are required
+                if not start_time or not end_time:
+                    raise ValueError(
+                        'Both start_time and end_time are required when using pagination (next_token). '
+                        'Use the exact start_time and end_time from the "query_params" in the previous response.'
+                    )
+                try:
+                    # Parse times for pagination (should be in ISO format from previous response)
+                    start_dt = parse_time_input(start_time)
+                    end_dt = parse_time_input(end_time)
+                except Exception as e:
+                    raise ValueError(
+                        f'Invalid time format for pagination. Use the exact start_time and end_time from the '
+                        f"'query_params' in the previous response. Error: {str(e)}"
+                    )
             else:
-                # First request - set defaults and parse normally
-                if not start_time:
-                    start_time = '1 day ago'
-                if not end_time:
-                    end_time = 'now'
-
-                # Parse time inputs
+                # First request - use provided times or defaults
+                start_time = start_time or '1 day ago'
+                end_time = end_time or 'now'
                 start_dt = parse_time_input(start_time)
                 end_dt = parse_time_input(end_time)
 
@@ -201,27 +196,22 @@ class CloudTrailTools:
             # Call CloudTrail API
             response = cloudtrail_client.lookup_events(**remove_null_values(lookup_params))
 
-            # Return events exactly as they come from CloudTrail API
-            events = response.get('Events', [])
-
             # Build result with consistent parameter format
-            query_params = {
-                'start_time': start_dt.isoformat(),
-                'end_time': end_dt.isoformat(),
-                'attribute_key': attribute_key,
-                'attribute_value': attribute_value,
-                'max_results': max_results,
-                'region': region,
-            }
-
             result = {
-                'events': events,
+                'events': response.get('Events', []),
                 'next_token': response.get('NextToken'),
-                'query_params': query_params,
+                'query_params': {
+                    'start_time': start_dt.isoformat(),
+                    'end_time': end_dt.isoformat(),
+                    'attribute_key': attribute_key,
+                    'attribute_value': attribute_value,
+                    'max_results': max_results,
+                    'region': region,
+                },
             }
 
             logger.info(
-                f'Successfully retrieved {len(events)} CloudTrail events from region {region}'
+                f'Successfully retrieved {len(result["events"])} CloudTrail events from region {region}'
             )
             return result
 
